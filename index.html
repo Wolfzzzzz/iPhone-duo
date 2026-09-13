@@ -368,6 +368,12 @@
   .meter.acc i{background:linear-gradient(90deg,#34c759,#ffd60a,#ff453a)}
 
   canvas.wave{width:100%;height:64px;display:block;margin-top:12px;border-radius:10px;background:rgba(0,0,0,.32)}
+  .hud-tip{
+    margin-top:12px;padding-top:11px;
+    border-top:1px solid rgba(255,255,255,.08);
+    font-size:10.5px;line-height:1.75;color:#82828e;
+  }
+  .hud-tip b{color:#cfcfda;font-weight:500}
 
   /* ============ 底部控制台 ============ */
   footer.console{
@@ -483,7 +489,7 @@
     <div class="headline">
       <p class="eyebrow">iPhone Duo</p>
       <h1>折叠，由此展开。</h1>
-      <p class="sub">用你设备的 <b>角度传感器</b> 与 <b>重力传感器</b> —— 倾斜机身，驱动这枚百余组件的超精密铰链</p>
+      <p class="sub">用你设备的 <b>角度传感器</b> 与 <b>重力传感器</b> —— 横向倾斜、纵向翻转，都能驱动这枚百余组件的超精密铰链</p>
     </div>
 
     <div class="stage" id="stage">
@@ -643,8 +649,9 @@
   <footer class="console">
     <div class="seg" id="segInput">
       <button data-in="auto" class="on">自动</button>
-      <button data-in="orientation">角度传感器</button>
-      <button data-in="gravity">重力传感器</button>
+      <button data-in="tilt">任意倾斜</button>
+      <button data-in="beta">前后翻 β</button>
+      <button data-in="gamma">左右倾 γ</button>
       <button data-in="drag">拖拽</button>
       <button data-in="demo">演示</button>
     </div>
@@ -674,7 +681,8 @@
 
   <div class="divider"></div>
 
-  <div class="row"><span class="k">β 前后倾角</span><span class="v" id="vBeta">0.0°</span></div>
+  <div class="row"><span class="k">综合倾角</span><span class="v" id="vTilt">0.0°</span></div>
+  <div class="row"><span class="k">β 前后翻角</span><span class="v" id="vBeta">0.0°</span></div>
   <div class="row"><span class="k">γ 左右倾角</span><span class="v" id="vGamma">0.0°</span></div>
   <div class="row"><span class="k">α 方位角</span><span class="v" id="vAlpha">0.0°</span></div>
 
@@ -686,6 +694,11 @@
   <div class="meter acc"><i id="mAcc"></i></div>
 
   <canvas class="wave" id="wave" width="480" height="128"></canvas>
+
+  <div class="hud-tip">
+    <b>横着倾</b> 或 <b>竖着翻</b> 都能驱动铰链<br>
+    平放 → 闭合 ｜ 立起 → 展开
+  </div>
 </aside>
 
 <div class="toast" id="toast"></div>
@@ -697,7 +710,7 @@
   /* ======================= 状态 ======================= */
   const HW = 240, HH = 344;          // 与 CSS 变量保持一致
   const S = {
-    input: 'auto',        // auto | orientation | gravity | drag | demo
+    input: 'auto',        // auto | tilt | beta | gamma | drag | demo
     fold: 0,              // 折叠角 0 = 完全展开, 180 = 完全闭合
     target: 0,
     beta: 0, gamma: 0, alpha: 0,
@@ -708,6 +721,8 @@
     snap: true,
     sound: false,
     hasOri: false, hasMot: false,
+    oriOK: false, motionOK: false,   // 通过真实性校验的传感器
+    permissionAsked: false, probed: false,
     live: false,          // 是否真的收到过传感器数据
     sawAny: false,
     lastShake: 0,
@@ -737,29 +752,46 @@
            typeof DeviceOrientationEvent.requestPermission === 'function';
   }
 
+  /*
+    注意：没有传感器的平台（如 macOS Chrome）也会各派发一次 deviceorientation /
+    devicemotion，但数值全是 0 或 null。必须滤掉，否则会被当成"传感器已连接"，
+    tilt 恒为 0，手机一进页面就死死合上。
+  */
   function onOrientation(e){
     if(e.beta === null && e.gamma === null && e.alpha === null) return;
+    // 三轴同时为 0 / 缺失 → 典型的空事件
+    const allZero = (e.beta  === 0 || e.beta  === null) &&
+                    (e.gamma === 0 || e.gamma === null) &&
+                    (e.alpha === 0 || e.alpha === null);
+    // 已经拿到真实数据后，再来的全零帧只会把数值打回 0，直接丢弃
+    if(allZero && S.oriOK) return;
+
     S.beta  = e.beta  === null ? S.beta  : e.beta;
     S.gamma = e.gamma === null ? S.gamma : e.gamma;
     S.alpha = e.alpha === null ? S.alpha : e.alpha;
     S.hasOri = true;
-    markLive();
+    if(!allZero){ S.oriOK = true; }
+    if(S.oriOK || S.motionOK) markLive();
   }
 
   function onMotion(e){
     const g = e.accelerationIncludingGravity;
     const a = e.acceleration;
-    if(g){
-      if(g.x !== null) S.ax = g.x;
-      if(g.y !== null) S.ay = g.y;
-      if(g.z !== null) S.az = g.z;
-      S.mag = Math.hypot(S.ax, S.ay, S.az);
+    if(g && g.x !== null){
+      const raw = Math.hypot(g.x, g.y, g.z);
+      if(raw < 0.5 && S.motionOK) return;   // 已确认有效后，全零帧按空事件丢弃
+      S.ax = g.x; S.ay = g.y; S.az = g.z;
+      S.mag = raw;
       S.dyn = Math.abs(S.mag - 9.80665);
+      // 真实设备静止时合加速度一定接近 1g（约 9.8 m/s²）
+      if(S.mag > 3.5 && S.mag < 22){ S.motionOK = true; S.hasMot = true; }
     } else if(a && a.x !== null){
       S.mag = Math.hypot(a.x, a.y, a.z);
       S.dyn = S.mag;
+      S.motionOK = true; S.hasMot = true;
     }
-    S.hasMot = true;
+    if(!S.oriOK && !S.motionOK) return;   // 空事件：不唤醒、不驱动
+
     markLive();
 
     // 甩一下 = 强制开合
@@ -785,32 +817,52 @@
   }
 
   function attach(){
+    // addEventListener 对相同的 (type, listener, capture) 会自动去重，可安全重复调用
     window.addEventListener('deviceorientation', onOrientation, true);
     window.addEventListener('devicemotion', onMotion, true);
   }
 
+  /*
+    关键：无条件先把监听挂上。
+    不能拿 requestPermission 是否存在来判断"要不要授权"——新版 Chrome（桌面/安卓）
+    也实现了这个 API，但它并不需要授权，早期版本因此完全不挂监听，传感器形同废掉。
+    需要授权的平台（iOS Safari）在授权通过后，同一批监听器照样能收到数据。
+  */
+  attach();
+
+  // 授权后二次确认：真的没有硬件时给出准确提示
+  function afterGrant(){
+    attach();
+    setTimeout(startProbe, 2500);
+  }
+
   function requestPermission(){
-    if(!needsPermission()){ attach(); return; }
+    S.permissionAsked = true;
+    if(!needsPermission()){ attach(); setTimeout(startProbe, 800); return; }
     Promise.all([
       DeviceOrientationEvent.requestPermission().catch(()=> 'denied'),
       (typeof DeviceMotionEvent !== 'undefined' && DeviceMotionEvent.requestPermission)
         ? DeviceMotionEvent.requestPermission().catch(()=> 'denied') : Promise.resolve('granted')
     ]).then(res=>{
-      if(res[0] === 'granted'){ attach(); }
-      else { showToast('<b>传感器权限被拒绝</b><br>iOS 需要在「设置 → Safari → 动作与方向」中允许，或改用拖拽 / 演示模式。'); }
+      if(res[0] === 'granted'){ afterGrant(); }
+      else {
+        showToast('<b>没能拿到传感器权限</b><br>iPhone 上需要在「设置 → Safari → 动作与方向」里允许；<br>如果这台设备本来就没有这类硬件，用 <b>拖拽 / 演示</b> 模式照样能玩。', 9000);
+      }
     });
   }
 
-  // 非 iOS 直接挂监听
-  if(!needsPermission()) attach();
-
-  // 4 秒内没收到任何数据 → 判定无传感器
-  setTimeout(()=>{
-    if(!S.live && S.input !== 'drag' && S.input !== 'demo'){
-      setInput('demo');
-      showToast('未检测到 <b>重力 / 角度传感器</b> —— 这台电脑（MacBook）没有这类硬件。<br>已切换为 <b>自动演示</b>：拖动鼠标、按 <span class="kbd">←</span><span class="kbd">→</span> 或 <span class="kbd">空格</span> 也能开合。用手机打开才能真正体感 (｡•ᴗ•｡)', 12000);
+  // 4 秒内没收到任何数据：区分「需要授权」和「真的没硬件」，别说错话
+  function startProbe(){
+    if(S.live || S.probed) return;      // 只提示一次
+    S.probed = true;
+    if(S.input !== 'drag' && S.input !== 'demo') setInput('demo');
+    if(needsPermission() && !S.permissionAsked){
+      showToast('这个设备需要你手动授权才能读取 <b>角度 / 重力传感器</b> —— 点上方的 <b>开启传感器</b> 就行。<br>已暂时切到 <b>自动演示</b>。', 12000);
+    }else{
+      showToast('未检测到 <b>重力 / 角度传感器</b> —— 这台电脑（MacBook）没有这类硬件。<br>已切换为 <b>自动演示</b>：拖动手机、按 <span class="kbd">←</span><span class="kbd">→</span> 或 <span class="kbd">空格</span> 也能开合。用手机打开才能真正体感 (｡•ᴗ•｡)', 12000);
     }
-  }, 4000);
+  }
+  setTimeout(startProbe, 4000);
 
   /* ======================= 音效 ======================= */
   let actx = null;
@@ -839,30 +891,41 @@
   }
 
   /* ======================= 映射：传感器 → 折叠角 ======================= */
-  function foldFromOrientation(){
-    // beta: 屏幕朝上平放 = 0°, 竖直正对用户 = 90°
-    // 映射：平放 → 闭合(180)，竖直 → 展开(0)
-    const b = clamp(S.beta, 0, 90);
-    return (1 - b / 90) * 180;
+  /*
+    旧版只读 beta（前后翻转），所以左右倾斜手机完全没反应。
+    现在把两个轴合成：前后翻 beta + 左右倾 gamma × 0.7。
+    0.7 是权重——左右侧倾的物理幅度天然比前后翻小，放大一点才跟手。
+    倾角 0° = 平放(闭合)，90° = 立起(展开)。
+  */
+  function tiltDeg(){
+    if(S.oriOK){
+      const tB = clamp(S.beta, 0, 90);            // 前后翻
+      const tG = clamp(Math.abs(S.gamma), 0, 90); // 左右倾（左右都算）
+      return clamp(tB + tG * 0.7, 0, 90);
+    }
+    // 兜底：只有加速度计时，用重力矢量与设备平面的夹角
+    return Math.acos(clamp(S.az / 9.80665, -1, 1)) * 180 / Math.PI;
   }
 
-  function foldFromGravity(){
-    // 用含重力的加速度矢量算俯仰角
-    const num = S.ay, den = Math.sqrt(S.ax*S.ax + S.az*S.az) || 1e-6;
-    let pitch = Math.atan2(num, den) * 180 / Math.PI;   // -90..90
-    pitch = Math.abs(pitch);
-    return (1 - clamp(pitch, 0, 90) / 90) * 180;
-  }
+  const foldFromTilt  = () => (1 - clamp(tiltDeg(), 0, 90) / 90) * 180;
+  const foldFromBeta  = () => (1 - clamp(S.beta, 0, 90) / 90) * 180;
+  const foldFromGamma = () => (1 - clamp(Math.abs(S.gamma), 0, 90) / 90) * 180;
 
   function currentSensorTarget(){
-    const mode = S.input;
-    if(mode === 'orientation' || (mode === 'auto' && S.hasOri)) return foldFromOrientation();
-    if(mode === 'gravity'     || (mode === 'auto' && S.hasMot)) return foldFromGravity();
+    const m = S.input;
+    if(m === 'beta')  return S.oriOK ? foldFromBeta() : null;
+    if(m === 'gamma') return S.oriOK ? foldFromGamma() : null;
+    if((m === 'tilt' || m === 'auto') && (S.oriOK || S.motionOK)) return foldFromTilt();
     return null;
   }
 
   /* ======================= 输入控制 ======================= */
+  const NEEDS_SENSOR = ['auto', 'tilt', 'beta', 'gamma'];
+  // 兼容旧链接里的 ?input=orientation / gravity
+  const MODE_ALIAS = { orientation: 'beta', gravity: 'tilt' };
+
   function setInput(mode){
+    mode = MODE_ALIAS[mode] || mode;
     S.input = mode;
     document.querySelectorAll('#segInput button').forEach(b=>{
       b.classList.toggle('on', b.dataset.in === mode);
@@ -873,10 +936,14 @@
     const btn = e.target.closest('button');
     if(!btn) return;
     const mode = btn.dataset.in;
-    if((mode === 'orientation' || mode === 'gravity' || mode === 'auto') && !S.live && needsPermission()){
+    if(NEEDS_SENSOR.includes(mode) && !S.live && needsPermission()){
       requestPermission();
     }
-    if((mode === 'orientation' || mode === 'gravity') && !S.live){
+    if(mode === 'gamma' && !S.live){
+      showToast('左右倾模式：把手机<b>左右</b>侧倾就能开合。<br>还没收到传感器数据 —— 需要用手机打开这个页面（iOS 需点「开启传感器」授权）。', 6000);
+    }else if(mode === 'beta' && !S.live){
+      showToast('前后翻模式：把手机<b>前后</b>翻转就能开合。<br>还没收到传感器数据 —— 需要用手机打开这个页面（iOS 需点「开启传感器」授权）。', 6000);
+    }else if(NEEDS_SENSOR.includes(mode) && !S.live){
       showToast('还没有收到传感器数据。<br>用手机打开这个页面才能读到 <b>角度 / 重力传感器</b>（iOS 需点「开启传感器」授权）。', 6000);
     }
     setInput(mode);
@@ -1038,6 +1105,7 @@
     $('vAngle').textContent = S.fold.toFixed(1) + '°';
     $('mAngle').style.width = (S.fold / 180 * 100).toFixed(1) + '%';
     $('vHalf').textContent  = (S.fold / 2).toFixed(1) + '°';
+    $('vTilt').textContent  = tiltDeg().toFixed(1) + '°';
     $('vBeta').textContent  = S.beta.toFixed(1) + '°';
     $('vGamma').textContent = S.gamma.toFixed(1) + '°';
     $('vAlpha').textContent = S.alpha.toFixed(1) + '°';
@@ -1158,9 +1226,22 @@
 
   setTimeout(()=>{
     if(!S.live){
-      showToast('倾斜你的设备试试～ 用手机打开才能读到 <b>重力 / 角度传感器</b>；电脑上可以 <b>拖动手机</b> 开合、<span class="kbd">Shift</span> + 拖动环绕视角。', 8000);
+      showToast('把手机 <b>横着倾斜</b> 或 <b>竖着翻转</b> 都能驱动铰链～<br>用手机打开才能读到传感器；电脑上可以 <b>拖动手机</b> 开合、<span class="kbd">Shift</span> + 拖动环绕视角。', 8000);
     }
   }, 900);
+
+  // 只读调试钩子：控制台执行 __iphoneDuo() 可查看当前传感器与铰链状态
+  window.__iphoneDuo = () => ({
+    input: S.input,
+    fold: +S.fold.toFixed(1),
+    target: +S.target.toFixed(1),
+    tilt: +tiltDeg().toFixed(1),
+    beta: +S.beta.toFixed(1),
+    gamma: +S.gamma.toFixed(1),
+    oriOK: S.oriOK,
+    motionOK: S.motionOK,
+    live: S.live
+  });
 
   requestAnimationFrame(tick);
 
