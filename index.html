@@ -1,0 +1,1174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#07070b">
+<title>iPhone Duo — 折叠，由此展开</title>
+<style>
+  :root{
+    --hw: 240px;            /* 单半宽度 */
+    --hh: 344px;            /* 机身高度 */
+    --a: 0deg;              /* 单半铰链旋转角 0=展开 180=闭合 */
+    --open: 1;              /* 1 全开 / 0 全闭 */
+    --shift: 0;             /* 居中补偿 */
+    --rx: 7deg;
+    --ry: -17deg;
+    --gx: 0;                /* 重力方向 -1..1 */
+    --gy: 0;
+    --glow: 0;              /* 动态加速度 0..1 */
+  }
+
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{
+    background:#07070b;
+    color:#f5f5f7;
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro SC","SF Pro Text","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+    letter-spacing:.01em;
+  }
+
+  /* ============ 环境背景 ============ */
+  .bg{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none}
+  .bg::before{
+    content:"";position:absolute;inset:-20%;
+    background:
+      radial-gradient(52% 44% at calc(50% + var(--gx) * 14%) calc(42% + var(--gy) * 14%), rgba(96,110,255,.20), transparent 62%),
+      radial-gradient(46% 40% at calc(22% - var(--gx) * 12%) calc(78% - var(--gy) * 10%), rgba(180,90,255,.14), transparent 66%),
+      radial-gradient(60% 50% at 82% 18%, rgba(0,190,255,.10), transparent 68%);
+    filter:blur(6px);
+    transition:background .35s linear;
+  }
+  .bg::after{
+    content:"";position:absolute;inset:0;
+    background:
+      linear-gradient(180deg,#07070b 0%,rgba(7,7,11,.35) 28%,rgba(7,7,11,.55) 70%,#07070b 100%),
+      radial-gradient(120% 90% at 50% 50%, transparent 40%, rgba(0,0,0,.6) 100%);
+  }
+  .stars{position:absolute;inset:0;opacity:.5;
+    background-image:
+      radial-gradient(1.4px 1.4px at 12% 22%, rgba(255,255,255,.75), transparent),
+      radial-gradient(1.1px 1.1px at 32% 68%, rgba(255,255,255,.5), transparent),
+      radial-gradient(1.6px 1.6px at 68% 14%, rgba(255,255,255,.6), transparent),
+      radial-gradient(1.1px 1.1px at 84% 52%, rgba(255,255,255,.45), transparent),
+      radial-gradient(1.3px 1.3px at 52% 86%, rgba(255,255,255,.4), transparent),
+      radial-gradient(1px 1px at 8% 74%, rgba(255,255,255,.35), transparent),
+      radial-gradient(1.2px 1.2px at 92% 82%, rgba(255,255,255,.4), transparent);
+    transform:translate3d(calc(var(--gx) * -14px), calc(var(--gy) * -14px), 0);
+    transition:transform .5s cubic-bezier(.2,.8,.3,1);
+  }
+
+  /* ============ 结构 ============ */
+  .page{position:relative;z-index:1;height:100%;display:grid;grid-template-rows:auto 1fr auto}
+
+  header.topbar{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:18px 30px;font-size:12px;color:#a1a1a9;
+    backdrop-filter:blur(14px);
+  }
+  .brand{display:flex;align-items:center;gap:9px;font-weight:600;font-size:13.5px;color:#f5f5f7;letter-spacing:.02em}
+  .brand .logo{width:15px;height:15px;fill:#f5f5f7;opacity:.9}
+  nav.topnav{display:flex;gap:26px}
+  nav.topnav span{cursor:default;transition:color .2s}
+  nav.topnav span:hover{color:#f5f5f7}
+  .badge{
+    font-size:11px;padding:4px 10px;border-radius:999px;
+    border:1px solid rgba(255,255,255,.16);color:#c7c7cf;background:rgba(255,255,255,.03)
+  }
+
+  main{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:0;padding:0 24px}
+
+  .headline{text-align:center;pointer-events:none;transition:opacity .5s,transform .5s}
+  .eyebrow{
+    font-size:13px;letter-spacing:.4em;text-transform:uppercase;
+    color:#8e8e98;margin-bottom:10px;font-weight:500;
+  }
+  h1{
+    font-size:clamp(28px,4.6vw,54px);
+    font-weight:600;letter-spacing:-.02em;line-height:1.08;
+    background:linear-gradient(180deg,#ffffff 20%,#b9b9c4 120%);
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+  }
+  .sub{margin-top:12px;font-size:clamp(12px,1.15vw,14.5px);color:#8e8e98}
+  .sub b{color:#e6e6ec;font-weight:500}
+
+  /* ============ 3D 舞台 ============ */
+  .stage{
+    position:relative;
+    display:flex;align-items:center;justify-content:center;
+    perspective:2400px;perspective-origin:50% 46%;
+    margin:22px 0 8px;
+    touch-action:none;
+  }
+  .halo{
+    position:absolute;left:50%;top:50%;width:760px;height:520px;
+    transform:translate(-50%,-50%);
+    background:radial-gradient(closest-side, rgba(122,142,255,calc(.24 + .26 * var(--glow))), transparent 72%);
+    filter:blur(30px);pointer-events:none;
+  }
+
+  .device{
+    position:relative;
+    width:calc(var(--hw) * 2);
+    height:var(--hh);
+    transform-style:preserve-3d;
+    transform:translateX(calc(var(--hw) * var(--shift))) rotateX(var(--rx)) rotateY(var(--ry)) scale(var(--dz,1));
+    will-change:transform;
+  }
+
+  .half{
+    position:absolute;top:0;width:var(--hw);height:var(--hh);
+    transform-style:preserve-3d;
+    will-change:transform;
+  }
+  /* 书本式折叠：左半绕中缝翻转，右半固定不动 */
+  /* translateZ 写在最左侧，作用于父坐标系：闭合时左半始终压在右半之上 */
+  .half-l{left:0;transform-origin:right center;transform:translateZ(1.4px) rotateY(var(--a))}
+  .half-r{right:0;transform-origin:left center;transform:translateZ(.4px)}
+
+  .face{
+    position:absolute;inset:0;
+    backface-visibility:hidden;-webkit-backface-visibility:hidden;
+    background:#0b0b0f;
+  }
+  .half-l .face-inner{border-radius:24px 0 0 24px}
+  .half-r .face-inner{border-radius:0 24px 24px 0}
+  /* 反面各转 180°；左半闭合时又转 180°，两次相抵，内容正好是正的 */
+  .face-outer,.face-back{transform:rotateY(180deg)}
+  .face-outer .flip,.face-back .flip{position:absolute;inset:0}
+  .half-l .face-outer{border-radius:24px}
+  .half-r .face-back{border-radius:24px}
+
+  /* 钛金属抛光中框 */
+  .frame{
+    position:absolute;inset:-4px;pointer-events:none;z-index:12;
+    border-radius:28px;
+    padding:4px;
+    background:linear-gradient(150deg,#ffffff 0%,#adb0be 9%,#4c4f5c 22%,#f2f3fa 36%,#5c5f6c 50%,#2b2d36 60%,#d6d8e4 74%,#6d7080 86%,#ffffff 100%);
+    -webkit-mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite:xor;
+    mask:linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    mask-composite:exclude;
+    box-shadow:0 0 0 .5px rgba(255,255,255,.28), 0 0 26px rgba(150,175,255,.14);
+  }
+  .half-l .frame{
+    background:linear-gradient(200deg,#ffffff 0%,#b3b6c4 12%,#42454f 26%,#f4f5fb 42%,#4d5059 56%,#dfe1ec 72%,#5f6270 88%,#ffffff 100%);
+  }
+
+  /* 屏幕本体 */
+  .screen{position:absolute;inset:0;overflow:hidden;background:#05050a}
+  .half-l .screen{border-radius:21px 0 0 21px}
+  .half-r .screen{border-radius:0 21px 21px 0}
+  .screen::after{
+    content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;z-index:10;
+    box-shadow:inset 0 0 0 1px rgba(255,255,255,.075), inset 0 0 26px rgba(0,0,0,.5);
+  }
+
+  .canvas-flow{
+    position:absolute;top:0;left:0;width:calc(var(--hw) * 2);height:var(--hh);
+    filter:brightness(calc(.34 + .66 * var(--open)));
+    transition:filter .06s linear;
+  }
+  .half-r .canvas-flow{left:calc(var(--hw) * -1)}
+
+  /* 折痕 */
+  /* z-index 高于中框，让折痕压住中缝的金属边 */
+  .crease{position:absolute;top:0;bottom:0;width:13px;pointer-events:none;z-index:20}
+  .half-l .crease{right:0;background:linear-gradient(90deg,transparent,rgba(0,0,0,.05) 58%,rgba(0,0,0,.24))}
+  .half-r .crease{left:0;background:linear-gradient(270deg,transparent,rgba(0,0,0,.05) 58%,rgba(0,0,0,.24))}
+
+  /* 玻璃反光 */
+  .glass{
+    position:absolute;inset:0;pointer-events:none;z-index:7;mix-blend-mode:screen;opacity:.55;
+    background:linear-gradient(112deg,transparent 26%,rgba(255,255,255,.13) 40%,rgba(255,255,255,.03) 50%,transparent 64%);
+    transform:translate3d(calc(var(--gx) * 16px), calc(var(--gy) * 12px), 0);
+    transition:transform .45s cubic-bezier(.2,.8,.3,1);
+  }
+
+  /* 铰链细节 */
+  .hinge{
+    position:absolute;top:4%;bottom:4%;width:2.5px;z-index:21;pointer-events:none;
+    background:linear-gradient(90deg,rgba(255,255,255,.10),rgba(0,0,0,.62),rgba(255,255,255,.14));
+    opacity:calc(.30 + .70 * (1 - var(--open)));
+  }
+  .half-l .hinge{right:0;border-radius:2px 0 0 2px}
+
+  /* 地面阴影 */
+  .ground{
+    position:absolute;left:50%;bottom:-6px;
+    width:calc(var(--hw) * (1.55 - .62 * var(--open)));
+    height:26px;transform:translateX(-50%);
+    background:radial-gradient(closest-side, rgba(0,0,0,.72), transparent 76%);
+    filter:blur(9px);pointer-events:none;
+    transition:width .1s linear;
+  }
+
+  /* ============ 内屏 UI ============ */
+  .wall{
+    position:absolute;inset:0;
+    background:
+      radial-gradient(80% 66% at 26% 20%, #2a2f6b 0%, transparent 60%),
+      radial-gradient(70% 60% at 82% 82%, #56216b 0%, transparent 62%),
+      radial-gradient(120% 100% at 50% 50%, #0d1030 0%, #06060d 78%);
+  }
+  .wall::after{
+    content:"";position:absolute;inset:0;opacity:.5;
+    background-image:
+      radial-gradient(1.3px 1.3px at 14% 26%, rgba(255,255,255,.8), transparent),
+      radial-gradient(1px 1px at 38% 72%, rgba(255,255,255,.5), transparent),
+      radial-gradient(1.5px 1.5px at 62% 18%, rgba(255,255,255,.65), transparent),
+      radial-gradient(1px 1px at 82% 58%, rgba(255,255,255,.45), transparent),
+      radial-gradient(1.2px 1.2px at 46% 44%, rgba(255,255,255,.35), transparent);
+    transform:translate3d(calc(var(--gx) * -10px), calc(var(--gy) * -10px), 0);
+    transition:transform .5s cubic-bezier(.2,.8,.3,1);
+  }
+
+  .sb{position:absolute;top:0;left:0;right:0;height:30px;display:flex;align-items:center;justify-content:space-between;padding:0 34px;font-size:11px;font-weight:600;color:#fff;z-index:5}
+  .sb .ring{width:13px;height:13px;border-radius:50%;border:1.6px solid rgba(255,255,255,.85);position:relative}
+  .sb .ring::after{content:"";position:absolute;inset:2.4px;border-radius:50%;background:#fff}
+  .sb .ring.batt::after{inset:2.4px 2.4px 2.4px 5px;border-radius:50% 40% 40% 50%;background:#7dffa8}
+  .sb-right{display:flex;gap:6px;align-items:center}
+
+  .homes{position:absolute;inset:30px 0 0 0;display:flex;padding:0 18px 0 18px;gap:14px;z-index:4}
+  .col-today{width:216px;display:flex;flex-direction:column;gap:10px;padding-top:4px}
+  .tw-title{font-size:15px;font-weight:600;color:#fff;padding-left:4px}
+  .tw-date{font-size:10.5px;color:rgba(255,255,255,.55);padding-left:4px;margin-bottom:2px}
+  .widget{
+    border-radius:16px;padding:11px 13px;
+    background:rgba(255,255,255,.09);
+    border:1px solid rgba(255,255,255,.10);
+    backdrop-filter:blur(8px);
+  }
+  .w-weather{display:flex;align-items:center;justify-content:space-between}
+  .w-weather .t{font-size:26px;font-weight:300;letter-spacing:-.02em;color:#fff;line-height:1}
+  .w-weather .c{font-size:9.5px;color:rgba(255,255,255,.62);margin-top:3px}
+  .w-weather .sun{width:26px;height:26px;border-radius:50%;background:radial-gradient(circle at 34% 32%,#ffe08a,#ff9f43);box-shadow:0 0 16px rgba(255,170,70,.55)}
+  .w-cal{display:flex;gap:9px;align-items:center}
+  .w-cal .bar{width:3px;height:26px;border-radius:2px;background:linear-gradient(#ff5f57,#ff9f43)}
+  .w-cal .tt{font-size:11px;font-weight:600;color:#fff}
+  .w-cal .ss{font-size:9.5px;color:rgba(255,255,255,.58);margin-top:2px}
+  .w-music{display:flex;gap:10px;align-items:center}
+  .w-music .art{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#5b6bff,#b14dff)}
+  .w-music .tt{font-size:11px;font-weight:600;color:#fff}
+  .w-music .ss{font-size:9.5px;color:rgba(255,255,255,.58);margin-top:2px}
+
+  .col-apps{flex:1;padding-top:4px;position:relative}
+  .appgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px 10px;padding:2px 10px 0 6px}
+  .app{display:flex;flex-direction:column;align-items:center;gap:5px}
+  .app i{
+    width:40px;height:40px;border-radius:11px;display:block;
+    box-shadow:0 5px 14px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.24);
+  }
+  .app span{font-size:8.5px;color:rgba(255,255,255,.82);letter-spacing:0}
+  .dock{
+    position:absolute;left:14px;right:14px;bottom:12px;height:52px;border-radius:18px;
+    background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.14);
+    backdrop-filter:blur(14px);
+    display:flex;align-items:center;justify-content:space-around;padding:0 12px;
+  }
+  .dock i{width:34px;height:34px;border-radius:10px;display:block;box-shadow:0 3px 10px rgba(0,0,0,.4)}
+
+  /* 竖向灵动岛 */
+  .island-v{
+    position:absolute;right:6px;top:50%;transform:translateY(-50%);
+    width:17px;height:70px;border-radius:11px;background:#000;z-index:6;
+    box-shadow:0 0 0 1px rgba(255,255,255,.06), 0 6px 20px rgba(0,0,0,.7);
+    display:flex;align-items:center;justify-content:center;overflow:hidden;
+  }
+  .island-v i{width:5px;height:5px;border-radius:50%;background:#1ee87a;box-shadow:0 0 8px #1ee87a;animation:pulse 2.2s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:1;transform:scale(1.15)}}
+
+  .homebar{position:absolute;bottom:6px;left:50%;transform:translateX(-50%);width:110px;height:4px;border-radius:3px;background:rgba(255,255,255,.5);z-index:6}
+
+  /* ============ 外屏 UI ============ */
+  .outerbg{
+    position:absolute;inset:0;border-radius:22px;
+    background:
+      radial-gradient(80% 60% at 30% 16%, #2b2f6d 0%, transparent 62%),
+      radial-gradient(70% 60% at 78% 88%, #4c2064 0%, transparent 64%),
+      linear-gradient(180deg,#0a0a16,#06060c);
+  }
+  .outerui{position:absolute;inset:0;padding:34px 20px 20px;display:flex;flex-direction:column;border-radius:22px;overflow:hidden}
+  .o-time{font-size:60px;font-weight:250;letter-spacing:-.045em;color:#fff;line-height:.96;font-variant-numeric:tabular-nums}
+  .o-date{font-size:11.5px;color:rgba(255,255,255,.62);margin-top:6px}
+  .o-weather{margin-top:16px;display:flex;align-items:center;gap:9px;font-size:11.5px;color:rgba(255,255,255,.86)}
+  .o-weather .sun{width:19px;height:19px;border-radius:50%;background:radial-gradient(circle at 34% 32%,#ffe08a,#ff9f43);box-shadow:0 0 12px rgba(255,170,70,.5)}
+  .o-notifs{margin-top:auto;display:flex;flex-direction:column;gap:7px}
+  .notif{
+    background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.13);
+    border-radius:14px;padding:9px 11px;backdrop-filter:blur(10px);
+  }
+  .notif .h{display:flex;align-items:center;gap:6px;margin-bottom:3px}
+  .notif .ic{width:13px;height:13px;border-radius:4.5px;background:linear-gradient(135deg,#34c759,#0aa06e)}
+  .notif .ic.b{background:linear-gradient(135deg,#4b7bff,#8a4dff)}
+  .notif .n{font-size:9px;color:rgba(255,255,255,.72);letter-spacing:.02em}
+  .notif .m{font-size:10.5px;color:#fff;line-height:1.35}
+
+  /* ============ 背面 ============ */
+  .backbody{
+    position:absolute;inset:0;border-radius:22px;
+    background:
+      linear-gradient(155deg,#2b2b36 0%,#14141b 26%,#23232e 48%,#101017 70%,#26262f 100%);
+  }
+  .backbody::after{
+    content:"";position:absolute;inset:0;border-radius:inherit;opacity:.5;
+    background:linear-gradient(115deg,transparent 34%,rgba(255,255,255,.09) 47%,transparent 60%);
+  }
+  .camisland{
+    position:absolute;top:16px;right:16px;width:96px;height:44px;border-radius:14px;
+    background:linear-gradient(150deg,#2e2e39,#191920);
+    border:1px solid rgba(255,255,255,.09);
+    display:flex;align-items:center;gap:8px;padding:0 9px;
+    box-shadow:0 6px 18px rgba(0,0,0,.6);
+  }
+  .lens{
+    width:27px;height:27px;border-radius:50%;
+    background:radial-gradient(circle at 36% 32%, #3a4a6b, #0a0a12 62%);
+    box-shadow:inset 0 0 0 2px rgba(255,255,255,.14), 0 0 10px rgba(0,0,0,.8);
+    position:relative;
+  }
+  .lens::after{content:"";position:absolute;left:5px;top:5px;width:8px;height:8px;border-radius:50%;background:radial-gradient(circle,rgba(180,215,255,.85),transparent 70%)}
+  .lens.small{width:15px;height:15px}
+  .flash{width:12px;height:12px;border-radius:50%;background:radial-gradient(circle,#fff4d0,#c9a24a);box-shadow:0 0 9px rgba(255,235,170,.6)}
+  .aplogo{
+    position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:44px;height:44px;fill:rgba(255,255,255,.13);
+  }
+
+  /* ============ HUD 数据面板 ============ */
+  .hud{
+    position:fixed;top:92px;right:26px;width:268px;z-index:30;
+    background:rgba(18,18,24,.72);
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:18px;padding:16px 16px 14px;
+    -webkit-backdrop-filter:blur(22px) saturate(1.4);
+    backdrop-filter:blur(22px) saturate(1.4);
+    box-shadow:0 20px 50px rgba(0,0,0,.5);
+    transition:transform .35s cubic-bezier(.2,.8,.3,1),opacity .3s;
+  }
+  .hud h3{
+    font-size:10.5px;letter-spacing:.18em;color:#7d7d88;font-weight:600;
+    text-transform:uppercase;margin-bottom:12px;display:flex;align-items:center;gap:7px;
+  }
+  .dot{width:6px;height:6px;border-radius:50%;background:#48484f}
+  .dot.live{background:#34c759;box-shadow:0 0 8px #34c759;animation:pulse 1.8s ease-in-out infinite}
+  .dot.warn{background:#ff9f0a;box-shadow:0 0 8px #ff9f0a}
+
+  .row{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0;font-size:11.5px}
+  .row .k{color:#8a8a95}
+  .row .v{color:#f0f0f5;font-variant-numeric:tabular-nums;font-weight:500;font-size:12px}
+  .row .v.big{font-size:16px;color:#fff;font-weight:600}
+  .divider{height:1px;background:rgba(255,255,255,.08);margin:9px 0}
+
+  .meter{height:4px;border-radius:3px;background:rgba(255,255,255,.09);overflow:hidden;margin-top:7px}
+  .meter i{display:block;height:100%;width:0%;border-radius:3px;
+    background:linear-gradient(90deg,#5b6bff,#b14dff);transition:width .08s linear}
+  .meter.acc i{background:linear-gradient(90deg,#34c759,#ffd60a,#ff453a)}
+
+  canvas.wave{width:100%;height:64px;display:block;margin-top:12px;border-radius:10px;background:rgba(0,0,0,.32)}
+
+  /* ============ 底部控制台 ============ */
+  footer.console{
+    display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap;
+    padding:14px 26px 22px;
+  }
+  .seg{
+    display:flex;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);
+    border-radius:12px;padding:3px;gap:2px;
+  }
+  .seg button{
+    appearance:none;border:0;background:transparent;color:#9a9aa4;
+    font-size:11.5px;padding:7px 13px;border-radius:9px;cursor:pointer;
+    font-family:inherit;font-weight:500;transition:all .22s;white-space:nowrap;
+  }
+  .seg button:hover{color:#e2e2ea}
+  .seg button.on{background:rgba(255,255,255,.13);color:#fff;box-shadow:0 1px 6px rgba(0,0,0,.35)}
+
+  .ctl{
+    display:flex;align-items:center;gap:9px;height:38px;padding:0 14px;
+    background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);border-radius:12px;
+    font-size:11.5px;color:#9a9aa4;
+  }
+  .ctl .lab{color:#c3c3cc;font-weight:500}
+  input[type=range]{
+    -webkit-appearance:none;width:88px;height:3px;border-radius:3px;
+    background:rgba(255,255,255,.18);outline:none;cursor:pointer;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none;width:13px;height:13px;border-radius:50%;
+    background:#fff;box-shadow:0 1px 5px rgba(0,0,0,.5);cursor:pointer;
+  }
+  .switch{
+    appearance:none;border:0;cursor:pointer;font-family:inherit;
+    display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;
+    background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);
+    border-radius:12px;font-size:11.5px;color:#9a9aa4;transition:all .22s;
+  }
+  .switch:hover{background:rgba(255,255,255,.10)}
+  .switch .track{width:30px;height:17px;border-radius:9px;background:rgba(255,255,255,.16);position:relative;transition:background .22s;flex:none}
+  .switch .track::after{content:"";position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#fff;transition:transform .22s;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+  .switch.on{color:#fff}
+  .switch.on .track{background:#34c759}
+  .switch.on .track::after{transform:translateX(13px)}
+
+  .btn-primary{
+    appearance:none;border:0;font-family:inherit;cursor:pointer;
+    height:38px;padding:0 18px;border-radius:12px;font-size:11.5px;font-weight:600;
+    background:linear-gradient(180deg,#fff,#dcdce4);color:#0a0a12;
+    transition:transform .18s,box-shadow .18s;
+    box-shadow:0 4px 16px rgba(255,255,255,.14);
+  }
+  .btn-primary:hover{transform:translateY(-1px);box-shadow:0 7px 22px rgba(255,255,255,.22)}
+  .btn-primary:active{transform:translateY(0)}
+  .btn-ghost{
+    appearance:none;font-family:inherit;cursor:pointer;height:38px;padding:0 14px;border-radius:12px;
+    font-size:11.5px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.09);
+    color:#9a9aa4;transition:all .2s;
+  }
+  .btn-ghost:hover{color:#fff;background:rgba(255,255,255,.10)}
+
+  /* ============ 提示条 ============ */
+  .toast{
+    position:fixed;left:50%;bottom:104px;transform:translate(-50%,18px);
+    max-width:min(560px,88vw);
+    background:rgba(22,22,28,.9);border:1px solid rgba(255,255,255,.12);
+    border-radius:14px;padding:13px 18px;font-size:12px;line-height:1.55;color:#d8d8e0;
+    backdrop-filter:blur(20px);box-shadow:0 18px 46px rgba(0,0,0,.55);
+    opacity:0;pointer-events:none;transition:opacity .4s,transform .4s;z-index:60;text-align:center;
+  }
+  .toast.show{opacity:1;transform:translate(-50%,0)}
+  .toast b{color:#fff;font-weight:600}
+  .toast .kbd{
+    display:inline-block;padding:1px 6px;border-radius:5px;background:rgba(255,255,255,.12);
+    border:1px solid rgba(255,255,255,.14);font-size:11px;color:#fff;margin:0 2px;
+  }
+
+  @media (max-width:1180px){ .hud{display:none} }
+  @media (max-width:760px){
+    header.topbar{padding:14px 16px}
+    nav.topnav{display:none}
+    .stage{padding:0}
+    main{padding:0 12px}
+    footer.console{padding:12px 12px 18px;gap:10px}
+    .ctl, .switch{padding:0 11px}
+    input[type=range]{width:64px}
+    :root{--hw:200px;--hh:287px}
+  }
+  @media (max-height:720px){
+    h1{font-size:26px}
+    .sub{display:none}
+  }
+</style>
+</head>
+<body>
+
+<div class="bg"><div class="stars"></div></div>
+
+<div class="page">
+
+  <header class="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M16.365 1.43c0 1.14-.42 2.2-1.25 3.03-.99.99-2.16 1.56-3.4 1.47a3.4 3.4 0 0 1-.03-.42c0-1.1.48-2.28 1.34-3.24C13.9 1.26 15.2.75 16.32.72c.03.24.045.48.045.71zM20.6 17.2c-.4.92-.59 1.33-1.11 2.14-.72 1.13-1.74 2.54-3 2.55-1.12.01-1.41-.73-2.93-.72-1.52.01-1.84.74-2.96.73-1.26-.01-2.22-1.28-2.94-2.41C5.24 15.7 4.9 11.7 6.4 9.44c1.06-1.6 2.74-2.54 4.32-2.54 1.6 0 2.61.74 3.94.74 1.28 0 2.07-.74 3.92-.74 1.4 0 2.89.76 3.95 2.08-3.47 1.9-2.91 6.86-.93 8.22z"/></svg>
+      iPhone Duo
+    </div>
+    <nav class="topnav">
+      <span>概览</span><span>设计</span><span>显示屏</span><span>铰链</span><span>技术规格</span>
+    </nav>
+    <div class="badge" id="priceBadge">RMB 15999 起</div>
+  </header>
+
+  <main>
+    <div class="headline">
+      <p class="eyebrow">iPhone Duo</p>
+      <h1>折叠，由此展开。</h1>
+      <p class="sub">用你设备的 <b>角度传感器</b> 与 <b>重力传感器</b> —— 倾斜机身，驱动这枚百余组件的超精密铰链</p>
+    </div>
+
+    <div class="stage" id="stage">
+      <div class="halo"></div>
+
+      <div class="device" id="device">
+
+        <!-- ================= 左半 ================= -->
+        <div class="half half-l">
+          <div class="face face-inner">
+            <div class="screen">
+              <div class="canvas-flow">
+                <div class="wall"></div>
+                <div class="sb">
+                  <span>9:41</span>
+                  <span class="sb-right">
+                    <span class="ring"></span>
+                    <span class="ring batt"></span>
+                  </span>
+                </div>
+                <div class="homes">
+                  <div class="col-today">
+                    <div class="tw-title">今天</div>
+                    <div class="tw-date">9 月 13 日 星期日</div>
+                    <div class="widget w-weather">
+                      <div><div class="t">24°</div><div class="c">多云 · 最高 27° 最低 19°</div></div>
+                      <div class="sun"></div>
+                    </div>
+                    <div class="widget w-cal">
+                      <div class="bar"></div>
+                      <div><div class="tt">09:30 雅思听力精练</div><div class="ss">10 分钟后 · 昆山巴黎春天</div></div>
+                    </div>
+                    <div class="widget w-music">
+                      <div class="art"></div>
+                      <div><div class="tt">正在播放</div><div class="ss">Lo-Fi Focus · 专注歌单</div></div>
+                    </div>
+                  </div>
+                  <div class="col-apps">
+                    <div class="appgrid">
+                      <div class="app"><i style="background:linear-gradient(135deg,#4b7bff,#7a4dff)"></i><span>信息</span></div>
+                      <div class="app"><i style="background:linear-gradient(135deg,#34c759,#0aa06e)"></i><span>电话</span></div>
+                      <div class="app"><i style="background:linear-gradient(135deg,#5ac8fa,#0a84ff)"></i><span>邮件</span></div>
+                      <div class="app"><i style="background:linear-gradient(135deg,#ff9f0a,#ff6b00)"></i><span>提醒</span></div>
+                      <div class="app"><i style="background:linear-gradient(135deg,#bf5af2,#8a4dff)"></i><span>照片</span></div>
+                      <div class="app"><i style="background:linear-gradient(135deg,#ff453a,#d70015)"></i><span>地图</span></div>
+                    </div>
+                    <div class="dock">
+                      <i style="background:linear-gradient(135deg,#4b7bff,#7a4dff)"></i>
+                      <i style="background:linear-gradient(135deg,#34c759,#0aa06e)"></i>
+                      <i style="background:linear-gradient(135deg,#5ac8fa,#0a84ff)"></i>
+                      <i style="background:linear-gradient(135deg,#ff9f0a,#ff6b00)"></i>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="crease"></div>
+              <div class="glass"></div>
+              <div class="hinge"></div>
+            </div>
+            <div class="frame"></div>
+          </div>
+
+          <div class="face face-outer">
+            <div class="flip">
+              <div class="screen" style="border-radius:21px;overflow:hidden">
+                <div class="outerbg"></div>
+                <div class="outerui">
+                  <div class="o-time" id="outerClock">9:41</div>
+                  <div class="o-date">9 月 13 日 星期日</div>
+                  <div class="o-weather"><span class="sun"></span><span>24° 多云 · 昆山</span></div>
+                  <div class="o-notifs">
+                    <div class="notif">
+                      <div class="h"><span class="ic"></span><span class="n">信息</span></div>
+                      <div class="m">iPhone Duo 已开始预售，10 月 16 日晚 8 点。</div>
+                    </div>
+                    <div class="notif">
+                      <div class="h"><span class="ic b"></span><span class="n">日历</span></div>
+                      <div class="m">09:30 雅思听力精练 · 10 分钟后开始</div>
+                    </div>
+                  </div>
+                  <div class="homebar"></div>
+                </div>
+                <div class="glass" style="border-radius:21px"></div>
+              </div>
+            </div>
+            <div class="frame" style="border-radius:24px"></div>
+          </div>
+        </div>
+
+        <!-- ================= 右半 ================= -->
+        <div class="half half-r">
+          <div class="face face-inner">
+            <div class="screen">
+              <div class="canvas-flow">
+                <div class="wall"></div>
+                <div class="sb">
+                  <span></span>
+                  <span class="sb-right">
+                    <span class="ring"></span><span class="ring batt"></span>
+                  </span>
+                </div>
+                <div class="homes">
+                  <div class="col-today" style="visibility:hidden">
+                    <div class="tw-title">今天</div><div class="tw-date">9 月 13 日 星期日</div>
+                    <div class="widget" style="height:60px"></div>
+                    <div class="widget" style="height:44px"></div>
+                    <div class="widget" style="height:48px"></div>
+                  </div>
+                  <div class="col-apps">
+                    <div class="appgrid">
+                      <div class="app"><i style="background:linear-gradient(135deg,#30d158,#00a86b)"></i><span>设置</span></div>
+                      <div class="app"><i style="background:linear-gradient(135deg,#ffd60a,#ff9f0a)"></i><span>备忘录</span></div>
+                      <div class="app"><i style="background:linear-gradient(135deg,#64d2ff,#0a84ff)"></i><span>Safari</span></div>
+                      <div class="app"><i style="background:linear-gradient(135deg,#ff6482,#ff2d55)"></i><span>音乐</span></div>
+                      <div class="app"><i style="background:linear-gradient(135deg,#a0a0ab,#5b5b66)"></i><span>计算器</span></div>
+                      <div class="app"><i style="background:linear-gradient(135deg,#5e5ce6,#3634a3)"></i><span>快捷指令</span></div>
+                    </div>
+                    <div class="dock">
+                      <i style="background:linear-gradient(135deg,#30d158,#00a86b)"></i>
+                      <i style="background:linear-gradient(135deg,#ffd60a,#ff9f0a)"></i>
+                      <i style="background:linear-gradient(135deg,#ff6482,#ff2d55)"></i>
+                      <i style="background:linear-gradient(135deg,#64d2ff,#0a84ff)"></i>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="crease"></div>
+              <div class="glass"></div>
+              <div class="island-v"><i></i></div>
+            </div>
+            <div class="frame"></div>
+          </div>
+
+          <div class="face face-back">
+            <div class="flip">
+              <div class="screen" style="border-radius:21px;overflow:hidden">
+                <div class="backbody"></div>
+                <div class="camisland">
+                  <span class="lens"></span>
+                  <span class="lens small"></span>
+                  <span class="flash"></span>
+                </div>
+                <svg class="aplogo" viewBox="0 0 24 24"><path d="M16.365 1.43c0 1.14-.42 2.2-1.25 3.03-.99.99-2.16 1.56-3.4 1.47a3.4 3.4 0 0 1-.03-.42c0-1.1.48-2.28 1.34-3.24C13.9 1.26 15.2.75 16.32.72c.03.24.045.48.045.71zM20.6 17.2c-.4.92-.59 1.33-1.11 2.14-.72 1.13-1.74 2.54-3 2.55-1.12.01-1.41-.73-2.93-.72-1.52.01-1.84.74-2.96.73-1.26-.01-2.22-1.28-2.94-2.41C5.24 15.7 4.9 11.7 6.4 9.44c1.06-1.6 2.74-2.54 4.32-2.54 1.6 0 2.61.74 3.94.74 1.28 0 2.07-.74 3.92-.74 1.4 0 2.89.76 3.95 2.08-3.47 1.9-2.91 6.86-.93 8.22z"/></svg>
+                <div class="glass" style="border-radius:21px"></div>
+              </div>
+            </div>
+            <div class="frame" style="border-radius:24px"></div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="ground"></div>
+    </div>
+  </main>
+
+  <footer class="console">
+    <div class="seg" id="segInput">
+      <button data-in="auto" class="on">自动</button>
+      <button data-in="orientation">角度传感器</button>
+      <button data-in="gravity">重力传感器</button>
+      <button data-in="drag">拖拽</button>
+      <button data-in="demo">演示</button>
+    </div>
+
+    <label class="ctl"><span class="lab">灵敏度</span><input type="range" id="sens" min="10" max="100" value="55"></label>
+
+    <button class="switch on" id="swSnap"><span class="track"></span><span>磁吸吸附</span></button>
+    <button class="switch" id="swSound"><span class="track"></span><span>铰链音</span></button>
+
+    <button class="btn-primary" id="btnSensor">开启传感器</button>
+    <button class="btn-ghost" id="btnReset">重置视角</button>
+  </footer>
+
+</div>
+
+<!-- ================= 数据面板 ================= -->
+<aside class="hud" id="hud">
+  <h3><span class="dot" id="hudDot"></span><span id="hudStatus">等待传感器</span></h3>
+
+  <div class="row"><span class="k">开合角度</span><span class="v big" id="vAngle">0.0°</span></div>
+  <div class="meter"><i id="mAngle"></i></div>
+
+  <div class="divider"></div>
+
+  <div class="row"><span class="k">状态</span><span class="v" id="vState">完全展开</span></div>
+  <div class="row"><span class="k">铰链单半角</span><span class="v" id="vHalf">0.0°</span></div>
+
+  <div class="divider"></div>
+
+  <div class="row"><span class="k">β 前后倾角</span><span class="v" id="vBeta">0.0°</span></div>
+  <div class="row"><span class="k">γ 左右倾角</span><span class="v" id="vGamma">0.0°</span></div>
+  <div class="row"><span class="k">α 方位角</span><span class="v" id="vAlpha">0.0°</span></div>
+
+  <div class="divider"></div>
+
+  <div class="row"><span class="k">重力矢量</span><span class="v" id="vGrav">0.00 / 0.00 / 1.00 g</span></div>
+  <div class="row"><span class="k">合加速度</span><span class="v" id="vMag">1.00 g</span></div>
+  <div class="row"><span class="k">动态加速度</span><span class="v" id="vDyn">0.00 m/s²</span></div>
+  <div class="meter acc"><i id="mAcc"></i></div>
+
+  <canvas class="wave" id="wave" width="480" height="128"></canvas>
+</aside>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ======================= 状态 ======================= */
+  const HW = 240, HH = 344;          // 与 CSS 变量保持一致
+  const S = {
+    input: 'auto',        // auto | orientation | gravity | drag | demo
+    fold: 0,              // 折叠角 0 = 完全展开, 180 = 完全闭合
+    target: 0,
+    beta: 0, gamma: 0, alpha: 0,
+    ax: 0, ay: 0, az: 9.80665,
+    mag: 9.80665,
+    dyn: 0,               // 动态加速度 (去掉重力分量)
+    sens: 0.55,
+    snap: true,
+    sound: false,
+    hasOri: false, hasMot: false,
+    live: false,          // 是否真的收到过传感器数据
+    sawAny: false,
+    lastShake: 0,
+    shakeLock: false,
+    dragging: false,
+    dragMode: 'fold',     // fold | orbit
+    lastX: 0, lastY: 0,
+    orbit: { rx: 7, ry: -17 },
+    demoPhase: 0,
+    demoHold: 0,
+    lastEnd: -1,
+    history: [],
+    accHist: []
+  };
+
+  const $ = id => document.getElementById(id);
+  const clamp = (v,a,b) => v < a ? a : (v > b ? b : v);
+  const lerp  = (a,b,t) => a + (b - a) * t;
+  const root = document.documentElement;
+
+  /* ======================= 传感器 ======================= */
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+  function needsPermission(){
+    return typeof DeviceOrientationEvent !== 'undefined' &&
+           typeof DeviceOrientationEvent.requestPermission === 'function';
+  }
+
+  function onOrientation(e){
+    if(e.beta === null && e.gamma === null && e.alpha === null) return;
+    S.beta  = e.beta  === null ? S.beta  : e.beta;
+    S.gamma = e.gamma === null ? S.gamma : e.gamma;
+    S.alpha = e.alpha === null ? S.alpha : e.alpha;
+    S.hasOri = true;
+    markLive();
+  }
+
+  function onMotion(e){
+    const g = e.accelerationIncludingGravity;
+    const a = e.acceleration;
+    if(g){
+      if(g.x !== null) S.ax = g.x;
+      if(g.y !== null) S.ay = g.y;
+      if(g.z !== null) S.az = g.z;
+      S.mag = Math.hypot(S.ax, S.ay, S.az);
+      S.dyn = Math.abs(S.mag - 9.80665);
+    } else if(a && a.x !== null){
+      S.mag = Math.hypot(a.x, a.y, a.z);
+      S.dyn = S.mag;
+    }
+    S.hasMot = true;
+    markLive();
+
+    // 甩一下 = 强制开合
+    if(S.dyn > 4.2 && !S.shakeLock && performance.now() - S.lastShake > 900){
+      S.lastShake = performance.now();
+      S.shakeLock = true;
+      setTimeout(()=>{ S.shakeLock = false; }, 900);
+      S.target = S.target < 90 ? 180 : 0;
+      playHinge(S.target === 0);
+    }
+  }
+
+  function markLive(){
+    if(!S.live){
+      S.live = true;
+      $('hudDot').className = 'dot live';
+      $('hudStatus').textContent = '传感器已连接';
+      $('btnSensor').textContent = '传感器在线';
+      $('btnSensor').style.opacity = '.55';
+      $('btnSensor').disabled = true;
+      hideToast();
+    }
+  }
+
+  function attach(){
+    window.addEventListener('deviceorientation', onOrientation, true);
+    window.addEventListener('devicemotion', onMotion, true);
+  }
+
+  function requestPermission(){
+    if(!needsPermission()){ attach(); return; }
+    Promise.all([
+      DeviceOrientationEvent.requestPermission().catch(()=> 'denied'),
+      (typeof DeviceMotionEvent !== 'undefined' && DeviceMotionEvent.requestPermission)
+        ? DeviceMotionEvent.requestPermission().catch(()=> 'denied') : Promise.resolve('granted')
+    ]).then(res=>{
+      if(res[0] === 'granted'){ attach(); }
+      else { showToast('<b>传感器权限被拒绝</b><br>iOS 需要在「设置 → Safari → 动作与方向」中允许，或改用拖拽 / 演示模式。'); }
+    });
+  }
+
+  // 非 iOS 直接挂监听
+  if(!needsPermission()) attach();
+
+  // 4 秒内没收到任何数据 → 判定无传感器
+  setTimeout(()=>{
+    if(!S.live && S.input !== 'drag' && S.input !== 'demo'){
+      setInput('demo');
+      showToast('未检测到 <b>重力 / 角度传感器</b> —— 这台电脑（MacBook）没有这类硬件。<br>已切换为 <b>自动演示</b>：拖动鼠标、按 <span class="kbd">←</span><span class="kbd">→</span> 或 <span class="kbd">空格</span> 也能开合。用手机打开才能真正体感 (｡•ᴗ•｡)', 12000);
+    }
+  }, 4000);
+
+  /* ======================= 音效 ======================= */
+  let actx = null;
+  function playHinge(opening){
+    if(!S.sound) return;
+    try{
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      if(actx.state === 'suspended') actx.resume();
+      const sr = actx.sampleRate, len = Math.floor(sr * 0.085);
+      const buf = actx.createBuffer(1, len, sr);
+      const d = buf.getChannelData(0);
+      for(let i=0;i<len;i++){
+        const t = i / len;
+        d[i] = (Math.random()*2-1) * Math.pow(1-t, 3.2);
+      }
+      const src = actx.createBufferSource(); src.buffer = buf;
+      const flt = actx.createBiquadFilter();
+      flt.type = 'bandpass';
+      flt.frequency.value = opening ? 1650 : 820;
+      flt.Q.value = 1.1;
+      const g = actx.createGain();
+      g.gain.value = 0.16;
+      src.connect(flt); flt.connect(g); g.connect(actx.destination);
+      src.start();
+    }catch(err){ /* 忽略 */ }
+  }
+
+  /* ======================= 映射：传感器 → 折叠角 ======================= */
+  function foldFromOrientation(){
+    // beta: 屏幕朝上平放 = 0°, 竖直正对用户 = 90°
+    // 映射：平放 → 闭合(180)，竖直 → 展开(0)
+    const b = clamp(S.beta, 0, 90);
+    return (1 - b / 90) * 180;
+  }
+
+  function foldFromGravity(){
+    // 用含重力的加速度矢量算俯仰角
+    const num = S.ay, den = Math.sqrt(S.ax*S.ax + S.az*S.az) || 1e-6;
+    let pitch = Math.atan2(num, den) * 180 / Math.PI;   // -90..90
+    pitch = Math.abs(pitch);
+    return (1 - clamp(pitch, 0, 90) / 90) * 180;
+  }
+
+  function currentSensorTarget(){
+    const mode = S.input;
+    if(mode === 'orientation' || (mode === 'auto' && S.hasOri)) return foldFromOrientation();
+    if(mode === 'gravity'     || (mode === 'auto' && S.hasMot)) return foldFromGravity();
+    return null;
+  }
+
+  /* ======================= 输入控制 ======================= */
+  function setInput(mode){
+    S.input = mode;
+    document.querySelectorAll('#segInput button').forEach(b=>{
+      b.classList.toggle('on', b.dataset.in === mode);
+    });
+  }
+
+  $('segInput').addEventListener('click', e=>{
+    const btn = e.target.closest('button');
+    if(!btn) return;
+    const mode = btn.dataset.in;
+    if((mode === 'orientation' || mode === 'gravity' || mode === 'auto') && !S.live && needsPermission()){
+      requestPermission();
+    }
+    if((mode === 'orientation' || mode === 'gravity') && !S.live){
+      showToast('还没有收到传感器数据。<br>用手机打开这个页面才能读到 <b>角度 / 重力传感器</b>（iOS 需点「开启传感器」授权）。', 6000);
+    }
+    setInput(mode);
+    if(mode === 'demo'){ S.demoPhase = S.fold / 180; S.demoHold = 0; }
+  });
+
+  $('sens').addEventListener('input', e=>{ S.sens = e.target.value / 100; });
+
+  $('swSnap').addEventListener('click', e=>{
+    S.snap = !S.snap;
+    e.currentTarget.classList.toggle('on', S.snap);
+  });
+
+  $('swSound').addEventListener('click', e=>{
+    S.sound = !S.sound;
+    e.currentTarget.classList.toggle('on', S.sound);
+    if(S.sound) playHinge(true);
+  });
+
+  $('btnSensor').addEventListener('click', ()=>{ requestPermission(); hideToast(); });
+
+  $('btnReset').addEventListener('click', ()=>{
+    S.orbit.rx = 7; S.orbit.ry = -17;
+    showToast('视角已重置');
+    setTimeout(hideToast, 1100);
+  });
+
+  /* ======================= 拖拽 / 键盘 ======================= */
+  const stage = $('stage');
+
+  stage.addEventListener('pointerdown', e=>{
+    S.dragging = true;
+    S.dragMode = e.shiftKey ? 'orbit' : 'fold';
+    S.lastX = e.clientX; S.lastY = e.clientY;
+    stage.setPointerCapture(e.pointerId);
+    if(S.dragMode === 'fold'){
+      S.prevInput = S.input;
+      setInput('drag');
+      S.targetBase = S.fold;
+    }
+  });
+
+  stage.addEventListener('pointermove', e=>{
+    if(!S.dragging) return;
+    const dx = e.clientX - S.lastX;
+    const dy = e.clientY - S.lastY;
+    S.lastX = e.clientX; S.lastY = e.clientY;
+
+    if(S.dragMode === 'orbit'){
+      S.orbit.ry = clamp(S.orbit.ry + dx * 0.4, -75, 75);
+      S.orbit.rx = clamp(S.orbit.rx - dy * 0.3, -45, 55);
+    }else{
+      const base = (typeof S.targetBase === 'number') ? S.targetBase : S.fold;
+      S.targetBase = clamp(base + dx * 1.35, 0, 180);
+      S.target = S.targetBase;
+      S.fold = S.target;
+    }
+  });
+
+  const endDrag = ()=>{
+    S.dragging = false;
+    // 松手后交还给原来的输入源（有传感器时继续体感控制）
+    if(S.prevInput && S.input === 'drag'){ setInput(S.prevInput); S.prevInput = null; }
+  };
+  stage.addEventListener('pointerup', endDrag);
+  stage.addEventListener('pointercancel', endDrag);
+  stage.addEventListener('wheel', e=>{
+    e.preventDefault();
+    S.orbit.ry = clamp(S.orbit.ry - e.deltaY * 0.05, -75, 75);
+  }, { passive:false });
+
+  document.addEventListener('keydown', e=>{
+    if(e.key === 'ArrowLeft' || e.key === 'ArrowRight'){
+      if(S.input !== 'drag') setInput('drag');
+      const dir = e.key === 'ArrowRight' ? 1 : -1;
+      S.fold = clamp(S.fold + dir * (e.shiftKey ? 1 : 12), 0, 180);
+      S.target = S.fold;
+      e.preventDefault();
+    }
+    if(e.key === ' '){
+      if(S.input !== 'demo') setInput('demo');
+      S.demoPhase = S.fold / 180; S.demoHold = 0;
+      e.preventDefault();
+    }
+  });
+
+  /* ======================= 提示 ======================= */
+  let toastTimer = null;
+  function showToast(html, ms){
+    const t = $('toast');
+    t.innerHTML = html;
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    if(ms) toastTimer = setTimeout(()=> t.classList.remove('show'), ms);
+  }
+  function hideToast(){ $('toast').classList.remove('show'); }
+
+  /* ======================= 渲染循环 ======================= */
+  let last = performance.now();
+
+  function tick(now){
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+
+    // ---- 目标角度 ----
+    if(S.input === 'demo'){
+      S.demoHold -= dt;
+      if(S.demoHold <= 0){
+        S.demoPhase += dt * 0.55;
+        if(S.demoPhase >= 2){ S.demoPhase = 0; S.demoHold = 0.9; }
+        const t = S.demoPhase;
+        // 0 → 1 → 0，端点停顿
+        const tri = t < 1 ? t : 2 - t;
+        const eased = tri < 0.5 ? 4*tri*tri*tri : 1 - Math.pow(-2*tri+2, 3)/2;
+        S.target = eased * 180;
+      }
+    } else if(S.input !== 'drag'){
+      const st = currentSensorTarget();
+      if(st !== null) S.target = st;
+    }
+
+    // ---- 平滑跟随 ----
+    let k = 0.055 + S.sens * 0.34;
+    const follow = 1 - Math.pow(1 - k, dt * 60);
+    S.fold = lerp(S.fold, S.target, follow);
+
+    // ---- 磁吸 ----
+    if(S.snap && S.input !== 'drag' && S.dyn < 1.6){
+      if(S.fold < 14)      S.fold = lerp(S.fold, 0,   0.30);
+      else if(S.fold > 166) S.fold = lerp(S.fold, 180, 0.30);
+    }
+
+    S.fold = clamp(S.fold, 0, 180);
+
+    // ---- 触及端点时播放铰链吸合音 ----
+    const endNow = S.fold < 3.5 ? 0 : (S.fold > 176.5 ? 180 : -1);
+    if(endNow !== -1 && endNow !== S.lastEnd) playHinge(endNow === 0);
+    S.lastEnd = endNow;
+
+    // ---- 写回 CSS ----
+    const open   = 1 - S.fold / 180;
+    const gx = clamp(S.ax / 9.8, -1, 1);
+    const gy = clamp(-S.ay / 9.8, -1, 1);
+
+    // 视角：基础角度 + 传感器微视差 + 拖拽环绕
+    const rx = S.orbit.rx + gy * 3.2;
+    const ry = S.orbit.ry + gx * 6.5;
+
+    root.style.setProperty('--a',    S.fold.toFixed(2) + 'deg');
+    root.style.setProperty('--open', open.toFixed(3));
+    root.style.setProperty('--shift', (-(S.fold / 180) * 0.5).toFixed(4));
+    root.style.setProperty('--rx',   rx.toFixed(2) + 'deg');
+    root.style.setProperty('--ry',   ry.toFixed(2) + 'deg');
+    root.style.setProperty('--gx',   gx.toFixed(3));
+    root.style.setProperty('--gy',   gy.toFixed(3));
+    root.style.setProperty('--glow', clamp(S.dyn / 6, 0, 1).toFixed(3));
+
+    // ---- HUD ----
+    $('vAngle').textContent = S.fold.toFixed(1) + '°';
+    $('mAngle').style.width = (S.fold / 180 * 100).toFixed(1) + '%';
+    $('vHalf').textContent  = (S.fold / 2).toFixed(1) + '°';
+    $('vBeta').textContent  = S.beta.toFixed(1) + '°';
+    $('vGamma').textContent = S.gamma.toFixed(1) + '°';
+    $('vAlpha').textContent = S.alpha.toFixed(1) + '°';
+    $('vGrav').textContent  = (S.ax/9.80665).toFixed(2) + ' / ' + (S.ay/9.80665).toFixed(2) + ' / ' + (S.az/9.80665).toFixed(2) + ' g';
+    $('vMag').textContent   = (S.mag / 9.80665).toFixed(2) + ' g';
+    $('vDyn').textContent   = S.dyn.toFixed(2) + ' m/s²';
+    $('mAcc').style.width   = clamp(S.dyn / 8 * 100, 0, 100).toFixed(1) + '%';
+
+    const st = S.fold < 8  ? '完全展开' : S.fold > 172 ? '完全闭合' :
+               S.fold < 84 ? '展开中' : S.fold <= 96 ? 'L 型半开' : '折叠中';
+    $('vState').textContent = st;
+
+    // ---- 波形 ----
+    S.history.push(S.fold);
+    S.accHist.push(clamp(S.dyn, 0, 12));
+    if(S.history.length > 240){ S.history.shift(); S.accHist.shift(); }
+
+    drawWave();
+
+    // ---- 外屏时钟 ----
+    const d = new Date();
+    $('outerClock').textContent = d.getHours() + ':' + String(d.getMinutes()).padStart(2,'0');
+
+    requestAnimationFrame(tick);
+  }
+
+  /* ======================= 波形绘制 ======================= */
+  const cv = $('wave'), ctx = cv.getContext('2d');
+
+  function drawWave(){
+    const w = cv.width, h = cv.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // 网格
+    ctx.strokeStyle = 'rgba(255,255,255,.055)';
+    ctx.lineWidth = 1;
+    for(let i=1;i<4;i++){
+      const y = h / 4 * i;
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+    for(let i=1;i<6;i++){
+      const x = w / 6 * i;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+    }
+
+    const n = S.history.length;
+    if(n < 2) return;
+
+    // 加速度柱
+    ctx.fillStyle = 'rgba(255,159,10,.22)';
+    const bw = w / 240;
+    for(let i=0;i<n;i++){
+      const v = S.accHist[i] / 12;
+      const bh = v * h * 0.55;
+      ctx.fillRect(i * bw, h - bh, Math.max(1, bw * 0.85), bh);
+    }
+
+    // 折叠角曲线
+    const grad = ctx.createLinearGradient(0, 0, w, 0);
+    grad.addColorStop(0, '#5b6bff');
+    grad.addColorStop(0.5, '#9d5bff');
+    grad.addColorStop(1, '#ff5bc8');
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 2.4;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    for(let i=0;i<n;i++){
+      const x = i * bw + bw / 2;
+      const y = h - (S.history[i] / 180) * (h - 8) - 4;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // 当前点
+    const cx = (n - 1) * bw + bw / 2;
+    const cy = h - (S.history[n-1] / 180) * (h - 8) - 4;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(cx, cy, 3.2, 0, Math.PI * 2); ctx.fill();
+  }
+
+  /* ======================= 自适应尺寸 ======================= */
+  function resize(){
+    const hw = parseFloat(getComputedStyle(root).getPropertyValue('--hw')) || HW;
+    const hh = parseFloat(getComputedStyle(root).getPropertyValue('--hh')) || HH;
+    const mainEl = document.querySelector('main');
+    const headEl = document.querySelector('.headline');
+    const availW = window.innerWidth;
+    const availH = Math.max(160, mainEl.clientHeight - headEl.offsetHeight - 40);
+    const scale = clamp(Math.min(
+      (availW * 0.70) / (hw * 2),
+      availH / hh
+    ), 0.40, 1.20);
+    root.style.setProperty('--dz', scale.toFixed(3));
+    // transform 缩放不改变布局高度，这里补上，避免压到标题
+    document.getElementById('stage').style.height = (hh * scale + 26) + 'px';
+  }
+  window.addEventListener('resize', resize);
+
+  /* ======================= 启动 ======================= */
+  resize();
+
+  // URL 参数：?fold=180&input=demo —— 便于直接分享某个状态
+  let intro = true;
+  try{
+    const q = new URLSearchParams(location.search);
+    if(q.has('input')) setInput(q.get('input'));
+    if(q.has('fold')){
+      S.fold = S.target = clamp(parseFloat(q.get('fold')) || 0, 0, 180);
+      intro = false;
+    }
+  }catch(err){ /* 忽略 */ }
+
+  if(intro){
+    // 开场：从闭合状态缓缓展开
+    S.fold = 180; S.target = 180;
+    setTimeout(()=>{ S.target = 0; }, 420);
+  }
+
+  setTimeout(()=>{
+    if(!S.live){
+      showToast('倾斜你的设备试试～ 用手机打开才能读到 <b>重力 / 角度传感器</b>；电脑上可以 <b>拖动手机</b> 开合、<span class="kbd">Shift</span> + 拖动环绕视角。', 8000);
+    }
+  }, 900);
+
+  requestAnimationFrame(tick);
+
+  // 页面隐藏时暂停声音上下文
+  document.addEventListener('visibilitychange', ()=>{
+    if(document.hidden && actx && actx.state === 'running') actx.suspend();
+  });
+})();
+</script>
+</body>
+</html>
